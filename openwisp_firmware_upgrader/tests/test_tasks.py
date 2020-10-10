@@ -12,10 +12,10 @@ UpgradeOperation = load_model('UpgradeOperation')
 
 
 class TestTasks(TestUpgraderMixin, TransactionTestCase):
-    _mock_updrade = 'openwisp_firmware_upgrader.upgraders.openwrt.OpenWrt.upgrade'
+    _mock_upgrade = 'openwisp_firmware_upgrader.upgraders.openwrt.OpenWrt.upgrade'
     _mock_connect = 'openwisp_controller.connection.models.DeviceConnection.connect'
 
-    @mock.patch(_mock_updrade, side_effect=SoftTimeLimitExceeded())
+    @mock.patch(_mock_upgrade, side_effect=SoftTimeLimitExceeded())
     @mock.patch(_mock_connect, return_value=True)
     @mock.patch(
         'openwisp_firmware_upgrader.base.models.AbstractUpgradeOperation.upgrade',
@@ -28,7 +28,7 @@ class TestTasks(TestUpgraderMixin, TransactionTestCase):
         self.assertEqual(uo.status, 'failed')
         self.assertIn('Operation timed out.', uo.log)
 
-    @mock.patch(_mock_updrade, return_value=True)
+    @mock.patch(_mock_upgrade, return_value=True)
     @mock.patch(_mock_connect, return_value=True)
     @mock.patch(
         'openwisp_firmware_upgrader.base.models.AbstractDeviceFirmware.create_upgrade_operation',
@@ -42,3 +42,27 @@ class TestTasks(TestUpgraderMixin, TransactionTestCase):
         self.assertEqual(BatchUpgradeOperation.objects.count(), 1)
         batch = BatchUpgradeOperation.objects.first()
         self.assertEqual(batch.status, 'failed')
+
+    @mock.patch(_mock_upgrade, return_value=True)
+    @mock.patch(_mock_connect, return_value=True)
+    @mock.patch('logging.Logger.warning')
+    def test_upgrade_firmware_resilience(self, mocked_logger, *args):
+        device_fw = self._create_device_firmware(upgrade=True)
+        upgrade_op = device_fw.image.upgradeoperation_set.first()
+        upgrade_op.delete()
+        tasks.upgrade_firmware.run(upgrade_op.id)
+        mocked_logger.assert_called_with(
+            f'The UpgradeOperation object with id {upgrade_op.id} has been deleted'
+        )
+
+    @mock.patch(_mock_upgrade, return_value=True)
+    @mock.patch(_mock_connect, return_value=True)
+    @mock.patch('logging.Logger.warning')
+    def test_batch_upgrade_operation_resilience(self, mocked_logger, *args):
+        env = self._create_upgrade_env()
+        batch = BatchUpgradeOperation.objects.create(build=env['build2'])
+        batch.delete()
+        tasks.batch_upgrade_operation.run(batch_id=batch.pk, firmwareless=False)
+        mocked_logger.assert_called_with(
+            f'The BatchUpgradeOperation object with id {batch.id} has been deleted'
+        )
